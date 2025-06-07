@@ -19,6 +19,8 @@ from matplotlib.collections import LineCollection
 from matplotlib import cm
 from matplotlib.colors import Normalize
 import subprocess
+import os
+
 
 
 from typing import List
@@ -198,7 +200,7 @@ class System:
 			y_max = np.max(self.y_box_constraints[:, 1]) 
 			ax.set_xlim(x_min*1.2, x_max*1.2)
 			ax.set_ylim(y_min*1.2, y_max*1.2)
-			ax.plot([x_min, x_max, x_max, x_min, x_min], [y_min, y_min, y_max, y_max, y_min], 'r--')      
+			ax.plot([x_min, x_max, x_max, x_min, x_min], [y_min, y_min, y_max, y_max, y_min], 'r--')	  
 		ax.set_xlabel('x position')
 		ax.set_ylabel('y position')
 		ax.set_title(f'Trajectory of the {self.name}')
@@ -328,146 +330,3 @@ class DoubleIntegrator(LinearSystem):
 			initial_state = np.zeros(n*2)
 		super().__init__(n_state=n*2, n_input=n, n_y=n, dt=dt, A=A, B=B, C=C, D=D, initial_state=initial_state,
 			input_box_constraints=input_box_constraints, y_box_constraints=y_box_constraints, noise_profile=noise_profile, name=name, discretized=False)
-
-
-class InvertedPendulum(System):
-	def __init__(self, dt=0.1, M=5, m=0.2, b=0.1, l=0.3, g=9.81, I=0.006, initial_state=None, input_box_constraints=None, y_box_constraints=None, noise_profile=None, name="Inverted Pendulum"):
-		"""
-		Initialize the Inverted Pendulum system.
-		Parameters:
-		- dt: float, time step for discretization
-		- M: float, mass of the cart in kg
-		- m: float, mass of the pendulum in kg
-		- b: float, damping coefficient in N*m*s
-		- l: float, length of the pendulum in m
-		- g: float, acceleration due to gravity in m/s^2
-		- I: float, moment of inertia of the pendulum in kg*m^2
-		- initial_state: array-like, initial state of the system, shape (4,)
-		- input_box_constraints: array-like, box constraints for the input, shape (1, 2)
-		- y_box_constraints: array-like, box constraints for the output, shape (2, 2)	
-		- noise_profile: tuple (mu, sigma), where mu is the mean (shape (2,)) and sigma is the covariance matrix (shape (2, 2))
-		- name: str, name of the system
-		"""
-		self.M = M  # mass of the cart
-		self.m = m
-		self.b = b
-		self.l = l
-		self.g = g
-		self.I = I
-		self.dt = dt
-
-		self.n_input = 1  # one input (force applied to the cart)
-		self.n_state = 4 # four states (position of the cart, velocity of the cart, angle of the pendulum, angular velocity of the pendulum)
-		self.n_y = 2 # two outputs (position of the cart, angle of the pendulum)
-		if initial_state is None:
-			initial_state = np.zeros(self.n_state)
-	
-		super().__init__(self.n_input, self.n_state, self.n_y, initial_state, input_box_constraints, y_box_constraints, noise_profile, name)
-	
-		self.y = initial_state[[0, 2]] # output is the position of the cart and angle of the pendulum
-		self.y_history = [np.copy(self.y)]
-  
-	def step(self, input_signal):
-		# the input controls the Force F.
-		# equation 1: (M+m) * x'' + b * x' + m * l * θ'' * cos(θ) - m * l * θ'^2 * sin(θ) = F
-		# equation 2: (I+ m * l^2) * θ'' + m * g * l * sin(θ) = - m * l * x'' * cos(θ)
-   
-		x, x_dot, theta, theta_dot = self.current_state
-		F = input_signal
-		# Common terms
-		sin_theta = np.sin(theta)
-		cos_theta = np.cos(theta)
-		total_mass = self.M + self.m
-		denom = (self.I + self.m * self.l ** 2) * total_mass - (self.m * self.l * cos_theta) ** 2
-
-		# Compute accelerations
-		x_ddot_new = ( (self.I + self.m * self.l ** 2) * (F - self.b * x_dot + self.m * self.l * theta_dot ** 2 * sin_theta) 
-						+ self.m ** 2 * self.l ** 2 * self.g * sin_theta * cos_theta ) / denom
-
-		theta_ddot_new = ( -self.m * self.l * cos_theta * (F - self.b * x_dot + self.m * self.l * theta_dot ** 2 * sin_theta) 
-							+ total_mass * self.m * self.g * self.l * sin_theta ) / denom
-
-		# Euler integration
-		x_dot += x_ddot_new * self.dt
-		x += x_dot * self.dt
-		theta_dot += theta_ddot_new * self.dt
-		theta += theta_dot * self.dt
-
-		# Update state
-		self.current_state = np.array([x, x_dot, theta, theta_dot])
-
-		# Output (cart position, pendulum angle) + noise
-		noise = np.random.multivariate_normal(self.mu, self.sigma)
-		self.y = self.current_state[[0, 2]].flatten() + noise
-
-		# Save histories
-		self.input_history.append(np.copy(input_signal))
-		self.state_history.append(np.copy(self.current_state))
-		self.y_history.append(np.copy(self.y))
-  
-		no_violation = True
-		if self.y_box_constraints is not None:
-			for i in range(self.n_y):
-				if self.y[i] < self.y_box_constraints[i, 0] - self.tol or self.y[i] > self.y_box_constraints[i, 1] + self.tol:
-					no_violation = False
-					print(f"Output Constraints violated for output {i}: {self.y[i]} not in {self.y_box_constraints[i]}")
-
-		return self.y.copy(), no_violation
-
-	def plot_trajectory(self, fig=None, ax=None, save_folder='Pendulum', save_file='pendulum-trajectory.gif'):
-		"""
-		Plot the trajectory of the Inverted Pendulum system.
-		Parameters:
-		- fig: matplotlib figure object, optional
-		- ax: matplotlib axes object, optional
-		- limit_chart: bool, whether to limit the chart to the box constraints
-		"""
-		if ax is None or fig is None:
-			fig, ax = plt.subplots()
-
-		l = self.l  # length of the pendulum
-		for i, xtheta in enumerate(self.y_history):
-			x, theta = xtheta
-			fig, ax = plt.subplots(figsize=(6, 4))
-			ax.set_xlim(-0.5, 0.5)
-			ax.set_ylim(0, 0.75)
-			ax.set_aspect('equal')
-			ax.set_title(f"Frame {i}")
-   
-			# Draw cart as a small rectangle
-			cart_width = 0.2
-			cart_height = 0.1
-			cart = plt.Rectangle((x - cart_width/2, 0), cart_width, cart_height, color='black')
-			ax.add_patch(cart)
-
-			# Calculate pendulum end position
-			pendulum_x = x + l * np.sin(theta)
-			pendulum_y = cart_height + l * np.cos(theta)
-
-			# Draw pendulum line
-			ax.plot([x, pendulum_x], [cart_height, pendulum_y], 'k-', linewidth=2)
-
-			# Draw pivot point
-			ax.plot(x, cart_height, 'ko')
-
-			if save_folder:
-				plt.savefig(f"{save_folder}/frame_{i:03d}.png")
-			else:
-				plt.show()
-			plt.close(fig)
-		if save_folder:
-			# C:\Program Files\ffmpeg
-			subprocess.run([
-				r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
-				"-i", "./Pendulum_frames/frame_%03d.png",
-				"-vf", "palettegen=max_colors=5",
-				"-y", "palette.png"
-			], check=True)
-			subprocess.run([
-				r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
-				"-r", "10",
-				"-i", "./Pendulum_frames/frame_%03d.png",
-				"-i", "palette.png",
-				"-filter_complex", "fps=30,scale=600:-1:flags=lanczos[x];[x][1:v]paletteuse",
-				"-y", f"./{save_file}"
-			], check=True)

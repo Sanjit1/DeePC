@@ -330,3 +330,191 @@ class DoubleIntegrator(LinearSystem):
 			initial_state = np.zeros(n*2)
 		super().__init__(n_state=n*2, n_input=n, n_y=n, dt=dt, A=A, B=B, C=C, D=D, initial_state=initial_state,
 			input_box_constraints=input_box_constraints, y_box_constraints=y_box_constraints, noise_profile=noise_profile, name=name, discretized=False)
+
+
+
+class InvertedPendulum(System):
+	def __init__(self, dt=0.01, g=9.81, l=1.0, m=1.0, initial_state=None,
+				 input_box_constraints=None, y_box_constraints=None, noise_profile=None, name="Inverted Pendulum"):
+		"""
+		Initialize the Inverted Pendulum system.
+
+		- dt: time step
+		- g: gravitational constant
+		- l: length of pendulum
+		- m: mass of pendulum
+		- initial_state: [theta, omega]
+		- input_box_constraints: box constraints on torque input u
+		- y_box_constraints: box constraints on [theta, omega] output
+		- noise_profile: (mu, sigma) for output noise
+		"""
+		self.dt = dt
+		self.g = g
+		self.l = l
+		self.m = m
+
+		n_state = 2  # [theta, omega]
+		n_input = 1  # torque input u
+		n_y = 1	  # outputs are [theta]
+
+		if initial_state is None:
+			initial_state = np.zeros(n_state)
+
+		super().__init__(n_input, n_state, n_y, initial_state,
+						 input_box_constraints, y_box_constraints, noise_profile, name)
+
+		self.y = np.array([np.copy(self.current_state)[0]])
+		self.y_history = [np.copy(self.y)]
+
+	def step(self, input_signal):
+		"""Advance the inverted pendulum by one step using Euler integration."""
+
+		if not isinstance(input_signal, (list, np.ndarray)):
+			raise ValueError("Input signal must be a list or numpy array.")
+		input_signal = np.array(input_signal)
+		if input_signal.shape != (self.n_input,):
+			raise ValueError(f"Input signal must be of shape ({self.n_input},), got {input_signal.shape}")
+
+		# Apply input constraints
+		if self.input_box_constraints is not None:
+			for i in range(self.n_input):
+				if input_signal[i] < self.input_box_constraints[i, 0] - self.tol or input_signal[i] > self.input_box_constraints[i, 1] + self.tol:
+					print(f"Input Constraints violated for input {i}: {input_signal[i]} not in {self.input_box_constraints[i]}")
+
+		# Current state
+		theta, omega = self.current_state
+		u = input_signal[0]
+
+		# Nonlinear dynamics
+		theta_dot = omega
+		omega_dot = (self.g / self.l) * np.sin(theta) + (1 / (self.m * self.l**2)) * u
+
+		# Euler integration
+		theta_next = theta + self.dt * theta_dot
+		omega_next = omega + self.dt * omega_dot
+
+		# Update state
+		self.current_state = np.array([theta_next, omega_next])
+
+		# Compute output with noise
+		noise = np.random.normal(self.mu, self.sigma)[0, 0]
+		self.y = np.array([self.current_state[0] + noise])
+	
+
+		# Update histories
+		self.input_history.append(np.copy(input_signal))
+		self.state_history.append(np.copy(self.current_state))
+		self.y_history.append(np.copy(self.y))
+
+		# Check output constraints
+		no_violation = True
+		if self.y_box_constraints is not None:
+			for i in range(self.n_y):
+				if self.y[i] < self.y_box_constraints[i, 0] - self.tol or self.y[i] > self.y_box_constraints[i, 1] + self.tol:
+					no_violation = False
+					print(f"Output Constraints violated for output {i}: {self.y[i]} not in {self.y_box_constraints[i]}")
+
+		return self.y.copy(), no_violation
+
+	def plot_trajectory(self, fig=None, ax=None):
+		"""
+		Plot the trajectory of the Inverted Pendulum system.
+		Parameters:
+		- fig: matplotlib figure object, optional
+		- ax: matplotlib axes object, optional
+		"""
+		if ax is None or fig is None:
+			fig, ax = plt.subplots()
+
+		# plot the y_history against time(using dt)
+		time = np.arange(len(self.y_history)) * self.dt
+		theta_history = np.array(self.y_history).flatten()
+		ax.plot(time, theta_history, label='Theta (rad)', color='blue')
+		ax.set_xlabel('Time (s)')
+		ax.set_ylabel('Theta (rad)')
+		ax.set_title(f'Trajectory of the {self.name}')
+		# if there arae box constraints, plot them
+		if self.y_box_constraints is not None:
+			y_min = self.y_box_constraints[0, 0]
+			y_max = self.y_box_constraints[0, 1]
+			ax.axhline(y_min, color='red', linestyle='--', label='Box Constraint Min')
+			ax.axhline(y_max, color='red', linestyle='--', label='Box Constraint Max')
+
+     
+
+	def animate_trajectory(self, fig=None, ax=None, show_theta=[], save_folder='./Pendulum_frames', save_file='./figures/pendulum-trajectory.gif', fps=120, ffmpeg_path = r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"):
+		"""
+		Plot the trajectory of the Inverted Pendulum system.
+		Parameters:
+		- fig: matplotlib figure object, optional
+		- ax: matplotlib axes object, optional
+		- limit_chart: bool, whether to limit the chart to the box constraints
+		"""
+		if ax is None or fig is None:
+			fig, ax = plt.subplots()
+
+		l = self.l  # length of the pendulum
+		if save_folder:
+			if not os.path.exists(save_folder):
+				os.makedirs(save_folder)
+			else:
+				for file in os.listdir(save_folder):
+					file_path = os.path.join(save_folder, file)
+					try:
+						if os.path.isfile(file_path) or os.path.islink(file_path):
+							os.unlink(file_path)
+					except Exception as e:
+						print(f"Failed to delete {file_path}. Reason: {e}")
+		for i, theta in enumerate(self.y_history):
+			theta = theta[0]  # convert to scalar
+			ax.set_xlim(-1.1*l, 1.1*l)
+			ax.set_ylim(0, 1.5*l)
+			ax.set_aspect('equal')
+			ax.set_title(f"Frame {i}")
+   
+			# Draw cart as a small rectangle
+			cart_width = 0.2
+			cart_height = 0.1
+			cart = plt.Rectangle(( - cart_width/2, 0), cart_width, cart_height, color='black')
+			ax.add_patch(cart)
+
+			# Calculate pendulum end position
+			
+			pendulum_x = l * np.sin(theta)
+			pendulum_y = cart_height + l * np.cos(theta)
+			# Draw pendulum line
+			ax.plot([0, pendulum_x], [cart_height, pendulum_y], 'k-', linewidth=2)
+			# show some angles that the user specified
+			for theta_show in show_theta:
+				pendulum_x_show = l * np.sin(theta_show)
+				pendulum_y_show = cart_height + l * np.cos(theta_show)
+				ax.plot([0, pendulum_x_show], [cart_height, pendulum_y_show], 'r--', linewidth=1)
+			# Draw pivot point
+			ax.plot(0, cart_height, 'ko')
+
+			if save_folder:
+				plt.savefig(f"{save_folder}/frame_{i:03d}.png")
+			else:
+				plt.show()
+			plt.cla()
+		plt.clf() # Close the figure
+  
+		# Update if needed
+		  # Update if needed
+			
+		if save_folder:
+			# C:\Program Files\ffmpeg
+			subprocess.run([
+				ffmpeg_path,
+				"-i", os.path.join(save_folder, "frame_%03d.png"),
+				"-vf", "palettegen=max_colors=5",
+				"-y", os.path.join(save_folder, "palette.png")
+			], check=True)
+			subprocess.run([
+				ffmpeg_path,
+				"-r", str(fps),
+				"-i", os.path.join(save_folder, "frame_%03d.png"),
+				"-i", os.path.join(save_folder, "palette.png"),
+				"-filter_complex", f"fps={fps},scale=600:-1:flags=lanczos[x];[x][1:v]paletteuse",
+				"-y", save_file
+			], check=True)

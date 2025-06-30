@@ -206,12 +206,14 @@ The DeePC optimization problem is formulated as:
 &\quad u_k \in \mathcal{U}, \quad y_k \in \mathcal{Y}
 \end{aligned}
 \]
-
-Here, the implicit model is encoded within g.
-
 For the sake of consistency and comparability, the same Cost parameters and Control Horizon is used here.
 
-\subsection{Regularization}
+
+Here, the implicit model is encoded within g. The slack variable \(\sigma_y\) accounts for measurement noise in the output trajectory.
+g is a vector of weights that maps the linear combination of past inputs and outputs to the future inputs and outputs, as such it is the same size as the number of columns in the Hankel Matrix.
+
+
+\subsubsection{Regularization}
 The terms \( \lambda_g \|g\|_1 \) and \( \lambda_y \|\sigma_y\|_1 \) serve to regularize the optimization:
 \begin{itemize}
     \item \( \lambda_g \) penalizes large weights in the implicit model.
@@ -446,7 +448,7 @@ Since this was a data driven method, the biggest takeaways were
     \item \textbf{DeePC is slow for large datasets} However using a low rank approximation can significantly speed up this time.
 \end{itemize}
 
-\subsection*{Future Work}
+\subsection{Future Work}
 One of the most interesting extensions would be to extend DeePC to nonlinear systems. Attempting to do this on a pendulum requires quite a lot of hyperparameter tuning, wich is why it is not in this report.
 The other interesting extension, would be to explore the low rank approximation further, since using the rank as a hyperparameter can significantly speed up the DeePC controller, and allow it to scale to larger datasets. At the same time, this may be challenging since underestimating the rank can lead to failure.
 \section{Appendix}
